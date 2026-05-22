@@ -6,10 +6,11 @@ const { createCanvas, loadImage, registerFont } = require('canvas');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const FormData = require('form-data');
 
 const app = express();
 
-// ----------------- CORS (Allows Netlify + local dev) -----------------
+// ----------------- CORS (Netlify frontend + local dev) -----------------
 const allowedOrigins = [
   'https://thephoenixarc.netlify.app',
   'https://phoenixarc.netlify.app',
@@ -32,8 +33,6 @@ app.use(cors({
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
-
-// No app.options('*', ...) needed – cors() handles preflight
 
 app.use(express.json());
 
@@ -150,11 +149,11 @@ function getWrappedLines(ctx, text, maxWidth) {
 }
 
 async function renderMotivationalImage(title, body, bgImageUrl, logoPath, outputPath) {
-  const width = 1080;                     // fixed width (Instagram‑friendly)
-  let currentY = 80;                      // top margin
-  const horizontalMargin = 80;             // left/right margins for text
+  const width = 1080;
+  let currentY = 80;
+  const horizontalMargin = 80;
 
-  // ---------- 1. Measure title ----------
+  // Measure title
   const titleFontSize = 76;
   const titleLineHeight = 95;
   const titleMaxWidth = width - 2 * horizontalMargin;
@@ -163,7 +162,7 @@ async function renderMotivationalImage(title, body, bgImageUrl, logoPath, output
   const titleLines = getWrappedLines(tempCtx, title.toUpperCase(), titleMaxWidth);
   const titleHeight = titleLines.length * titleLineHeight;
 
-  // ---------- 2. Measure body text box ----------
+  // Measure body
   const bodyFontSize = 40;
   const bodyLineHeight = 62;
   const bodyMaxWidth = 780;
@@ -173,38 +172,23 @@ async function renderMotivationalImage(title, body, bgImageUrl, logoPath, output
   const boxPadding = 50;
   const boxHeight = totalBodyTextHeight + 2 * boxPadding;
 
-  // ---------- 3. Measure logo ----------
+  // Logo
   let logoHeight = 0;
   if (fs.existsSync(logoPath)) {
     const logoImg = await loadImage(logoPath);
     const logoWidth = 220;
     logoHeight = (logoImg.height / logoImg.width) * logoWidth;
-    // add small decorative line above logo
-    logoHeight += 30;   // line gap + line itself
+    logoHeight += 30;
   } else {
-    logoHeight = 70;    // fallback text height
+    logoHeight = 70;
   }
 
-  // ---------- 4. CTA height ----------
-  const ctaFontSize = 26;
-  const ctaHeight = 50;   // approximate
-
-  // ---------- 5. Calculate total canvas height ----------
-  const totalHeight = currentY           // top margin
-    + titleHeight                        // title block
-    + 40                                 // gap after title
-    + boxHeight                          // body box
-    + 55                                 // gap before logo
-    + logoHeight                         // logo + its line
-    + 25                                 // gap before CTA
-    + ctaHeight                          // CTA text
-    + 80;                                // bottom margin
-
-  // Create canvas with dynamic height
+  const ctaHeight = 50;
+  const totalHeight = currentY + titleHeight + 40 + boxHeight + 55 + logoHeight + 25 + ctaHeight + 80;
   const canvas = createCanvas(width, totalHeight);
   const ctx = canvas.getContext('2d');
 
-  // ---------- 6. Draw background (cover mode) ----------
+  // Background
   const bg = await loadImage(bgImageUrl);
   const bgWidth = bg.width;
   const bgHeight = bg.height;
@@ -215,7 +199,7 @@ async function renderMotivationalImage(title, body, bgImageUrl, logoPath, output
   const dy = (totalHeight - scaledHeight) / 2;
   ctx.drawImage(bg, dx, dy, scaledWidth, scaledHeight);
 
-  // Dark overlay gradient (stretched to new height)
+  // Overlay
   const grad = ctx.createLinearGradient(0, 0, 0, totalHeight);
   grad.addColorStop(0, 'rgba(0,0,0,0.75)');
   grad.addColorStop(0.5, 'rgba(0,0,0,0.55)');
@@ -227,17 +211,15 @@ async function renderMotivationalImage(title, body, bgImageUrl, logoPath, output
   ctx.shadowBlur = 20;
   ctx.textAlign = 'center';
 
-  // ---------- 7. Draw title ----------
+  // Title
   ctx.font = `bold ${titleFontSize}px "Poppins-Bold", Arial, sans-serif`;
   ctx.fillStyle = '#FFFFFF';
-  let y = currentY + titleLineHeight / 2;  // vertical center of first line
-  titleLines.forEach((line) => {
+  let y = currentY + titleLineHeight / 2;
+  for (const line of titleLines) {
     ctx.fillText(line, width / 2, y);
     y += titleLineHeight;
-  });
-  currentY += titleHeight + 40;  // after title + small gap
-
-  // Underline
+  }
+  currentY += titleHeight + 40;
   ctx.shadowBlur = 0;
   ctx.beginPath();
   ctx.moveTo(width / 2 - 100, currentY - 10);
@@ -247,25 +229,23 @@ async function renderMotivationalImage(title, body, bgImageUrl, logoPath, output
   ctx.stroke();
   currentY += 20;
 
-  // ---------- 8. Draw body box ----------
+  // Body box
   const boxX = (width - bodyMaxWidth - 2 * boxPadding) / 2;
   const boxY = currentY;
   ctx.fillStyle = 'rgba(0,0,0,0.82)';
   ctx.beginPath();
   roundedRect(ctx, boxX, boxY, bodyMaxWidth + 2 * boxPadding, boxHeight, 32);
   ctx.fill();
-
   ctx.font = `${bodyFontSize}px "Poppins-Regular", Arial, sans-serif`;
   ctx.fillStyle = '#F8F9FA';
   ctx.shadowBlur = 10;
   const textStartY = boxY + boxPadding + (boxHeight - totalBodyTextHeight) / 2 + 8;
-  bodyLines.forEach((line, i) => {
-    ctx.fillText(line, width / 2, textStartY + i * bodyLineHeight);
-  });
+  for (let i = 0; i < bodyLines.length; i++) {
+    ctx.fillText(bodyLines[i], width / 2, textStartY + i * bodyLineHeight);
+  }
+  currentY += boxHeight + 55;
 
-  currentY += boxHeight + 55;  // after box + gap
-
-  // ---------- 9. Draw logo + line above ----------
+  // Logo
   if (fs.existsSync(logoPath)) {
     ctx.beginPath();
     ctx.moveTo(width / 2 - 110, currentY - 25);
@@ -273,7 +253,6 @@ async function renderMotivationalImage(title, body, bgImageUrl, logoPath, output
     ctx.lineWidth = 2.5;
     ctx.strokeStyle = '#E8B86B';
     ctx.stroke();
-
     const logo = await loadImage(logoPath);
     const logoWidth = 220;
     const logoDrawHeight = (logo.height / logo.width) * logoWidth;
@@ -286,17 +265,27 @@ async function renderMotivationalImage(title, body, bgImageUrl, logoPath, output
     currentY += 70;
   }
 
-  // ---------- 10. Draw CTA ----------
-  ctx.font = `italic ${ctaFontSize}px "Poppins-Regular", sans-serif`;
+  // CTA
+  ctx.font = `italic 26px "Poppins-Regular", sans-serif`;
   ctx.fillStyle = '#E8B86B';
   ctx.fillText('✦ Share this to inspire someone ✦', width / 2, currentY + 45);
 
-  // Save image
   const buffer = canvas.toBuffer('image/jpeg', { quality: 0.96 });
   fs.writeFileSync(outputPath, buffer);
 }
 
-// ---------- API Endpoint ----------
+// ---------- ImgBB Upload ----------
+async function uploadToImgBB(imageBuffer, apiKey) {
+  const form = new FormData();
+  form.append('image', imageBuffer.toString('base64'));
+  const response = await axios.post('https://api.imgbb.com/1/upload', form, {
+    params: { key: apiKey },
+    headers: form.getHeaders()
+  });
+  return response.data.data.url;
+}
+
+// ---------- API Endpoint (FIXED) ----------
 app.post('/api/generate-post', async (req, res) => {
   const { topic } = req.body;
   if (!topic) return res.status(400).json({ error: 'Topic required' });
@@ -308,14 +297,37 @@ app.post('/api/generate-post', async (req, res) => {
     const imageName = `phoenix_${Date.now()}.jpg`;
     const imagePath = path.join(OUTPUT_DIR, imageName);
     await renderMotivationalImage(title, body, bgUrl, LOGO_PATH, imagePath);
+
+    // Read the generated image buffer
+    const imageBuffer = fs.readFileSync(imagePath);
     
+    // Try to upload to ImgBB (permanent storage)
+    let finalImageUrl = null;
+    const imgbbKey = process.env.IMGBB_API_KEY;
+    if (imgbbKey) {
+      try {
+        finalImageUrl = await uploadToImgBB(imageBuffer, imgbbKey);
+        console.log('✅ Uploaded to ImgBB:', finalImageUrl);
+        // Delete local file after successful upload
+        fs.unlinkSync(imagePath);
+      } catch (uploadErr) {
+        console.error('ImgBB upload failed:', uploadErr.message);
+        // Fallback to local serving (if Railway permits)
+        const backendUrl = process.env.BACKEND_URL || `https://${req.get('host')}`;
+        finalImageUrl = `${backendUrl}/images/${imageName}`;
+      }
+    } else {
+      console.warn('⚠️ IMGBB_API_KEY not set, using local file (may be deleted on restart)');
+      const backendUrl = process.env.BACKEND_URL || `https://${req.get('host')}`;
+      finalImageUrl = `${backendUrl}/images/${imageName}`;
+    }
+
     res.json({
       success: true,
       title,
       body,
       caption,
-      imageUrl: `/images/${imageName}`,
-      downloadUrl: `/api/download/${imageName}`
+      imageUrl: finalImageUrl,          // permanent HTTPS URL
     });
   } catch (err) {
     console.error(err);
@@ -323,7 +335,7 @@ app.post('/api/generate-post', async (req, res) => {
   }
 });
 
-// Download endpoint
+// Download endpoint (if local file exists)
 app.get('/api/download/:filename', (req, res) => {
   const filename = req.params.filename;
   const safePath = path.join(OUTPUT_DIR, path.basename(filename));
