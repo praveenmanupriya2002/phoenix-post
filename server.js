@@ -9,7 +9,7 @@ const axios = require('axios');
 
 const app = express();
 
-// ----------------- CORS (Allows Netlify + local dev) -----------------
+// ----------------- CORS -----------------
 const allowedOrigins = [
   'https://thephoenixarc.netlify.app',
   'https://phoenixarc.netlify.app',
@@ -33,11 +33,9 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// No app.options('*', ...) needed – cors() handles preflight
-
 app.use(express.json());
 
-// ---------- AI Client (Groq) ----------
+// ---------- AI Client ----------
 const openai = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
   baseURL: "https://api.groq.com/openai/v1"
@@ -71,19 +69,22 @@ async function generateMotivationalPost(topic) {
 Always respond in EXACTLY this format:
 
 TITLE: ... (max 8 words, powerful and uppercase style)
-BODY: ... (2-3 sentences, inspiring, can use line breaks)
-CAPTION: ... (full social media caption – use emojis, line breaks, calls to action like "💬 Comment", "🔁 Share", "❤️ Like". End with 10-15 RELEVANT hashtags)
+BODY: ... (Maximum 5 lines AND max 231 characters including spaces. Keep it concise and impactful.)
+CAPTION: ... (full social media caption with emojis, line breaks, CTA and hashtags)
 
 No extra words, no markdown, no explanations.`
       },
       {
         role: 'user',
         content: `Topic: "${topic}"
-Write a short, powerful motivation (title max 8 words, body 2-3 sentences).
-Then write a STRONG, EMOTIONAL caption. Include line breaks, emojis, a call to action, and 10-15 specific hashtags.`
+Write a short, powerful motivation.
+- TITLE: max 8 words
+- BODY: Maximum 5 lines & max 231 characters with spaces.
+- CAPTION: Strong emotional caption with emojis, line breaks, call to action and 10-15 hashtags.`
       }
     ],
-    temperature: 0.85,
+    temperature: 0.82,
+    max_tokens: 600,
   });
 
   const raw = completion.choices[0].message.content;
@@ -95,9 +96,19 @@ Then write a STRONG, EMOTIONAL caption. Include line breaks, emojis, a call to a
     throw new Error('Invalid AI response');
   }
 
+  let body = bodyMatch[1].trim();
+  // Enforce 231 characters including spaces
+  body = enforceCharLimit(body, 231);
+
+  // Keep original line breaks (AI may insert \n)
+  const bodyLines = body.split('\n').filter(line => line.trim() !== '');
+  if (bodyLines.length > 5) {
+    body = bodyLines.slice(0, 5).join('\n');
+  }
+
   return {
     title: titleMatch[1].trim(),
-    body: bodyMatch[1].trim(),
+    body: body,
     caption: captionMatch[1].trim()
   };
 }
@@ -106,8 +117,10 @@ Then write a STRONG, EMOTIONAL caption. Include line breaks, emojis, a call to a
 async function fetchBackgroundImage(topic) {
   const apiKey = process.env.PIXABAY_API_KEY;
   if (!apiKey) throw new Error('Missing Pixabay API key');
+  
   const keywords = topic.split(' ').slice(0, 3).join(' ');
   const url = `https://pixabay.com/api/?key=${apiKey}&q=${encodeURIComponent(keywords)}&image_type=photo&orientation=vertical&per_page=10`;
+  
   const res = await axios.get(url);
   if (!res.data.hits.length) {
     const fallback = await axios.get(`https://pixabay.com/api/?key=${apiKey}&q=nature&image_type=photo&orientation=vertical`);
@@ -149,113 +162,118 @@ function getWrappedLines(ctx, text, maxWidth) {
   return lines;
 }
 
+// ==================== MAIN RENDER FUNCTION (FIXED) ====================
 async function renderMotivationalImage(title, body, bgImageUrl, logoPath, outputPath) {
   const width = 1080;
   const height = 1080;
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
 
+  // Background
   const bg = await loadImage(bgImageUrl);
   ctx.drawImage(bg, 0, 0, width, height);
 
+  // Overlay
   const grad = ctx.createLinearGradient(0, 0, 0, height);
-  grad.addColorStop(0, 'rgba(0,0,0,0.7)');
-  grad.addColorStop(0.6, 'rgba(0,0,0,0.5)');
-  grad.addColorStop(1, 'rgba(0,0,0,0.8)');
+  grad.addColorStop(0, 'rgba(0,0,0,0.75)');
+  grad.addColorStop(0.45, 'rgba(0,0,0,0.55)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.85)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, width, height);
 
-  ctx.font = 'bold 76px "Poppins-Bold", "Arial", sans-serif';
+  // ==================== TITLE ====================
+  ctx.font = 'bold 76px "Poppins-Bold", Arial, sans-serif';
   ctx.fillStyle = '#FFFFFF';
-  ctx.shadowColor = 'rgba(0,0,0,0.8)';
-  ctx.shadowBlur = 16;
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 20;
   ctx.textAlign = 'center';
-  
+
   const titleMaxWidth = width - 160;
   const titleLines = getWrappedLines(ctx, title.toUpperCase(), titleMaxWidth);
   const titleLineHeight = 95;
-  const titleStartY = 180;
-  for (let i = 0; i < titleLines.length; i++) {
-    ctx.fillText(titleLines[i], width/2, titleStartY + i * titleLineHeight);
-  }
+  const titleStartY = 165;
+
+  titleLines.forEach((line, i) => {
+    ctx.fillText(line, width/2, titleStartY + i * titleLineHeight);
+  });
+
   const titleTotalHeight = titleLines.length * titleLineHeight;
-  
+
+  // Title underline
   ctx.shadowBlur = 0;
   ctx.beginPath();
-  ctx.moveTo(width/2 - 90, titleStartY + titleTotalHeight - 25);
-  ctx.lineTo(width/2 + 90, titleStartY + titleTotalHeight - 25);
+  ctx.moveTo(width/2 - 100, titleStartY + titleTotalHeight - 18);
+  ctx.lineTo(width/2 + 100, titleStartY + titleTotalHeight - 18);
   ctx.lineWidth = 10;
   ctx.strokeStyle = '#E8B86B';
   ctx.stroke();
 
-  ctx.font = '40px "Poppins-Regular", "Arial", sans-serif';
-  ctx.shadowBlur = 0;
-  const bodyLineHeight = 62;
-  const maxBodyWidth = width - 200;
-  const bodyLines = getWrappedLines(ctx, body, maxBodyWidth);
-  const bodyHeight = bodyLines.length * bodyLineHeight;
+  // ==================== BODY BOX ====================
+  ctx.font = '40px "Poppins-Regular", Arial, sans-serif';
   
-  const boxPadding = 40;
-  const boxWidth = maxBodyWidth + 70;
-  const boxHeight = bodyHeight + (boxPadding * 2);
-  
-  const reservedBottom = 180;
-  const freeAreaStart = titleStartY + titleTotalHeight + 40;
-  const freeAreaEnd = height - reservedBottom;
-  const freeAreaHeight = freeAreaEnd - freeAreaStart;
-  const boxY = freeAreaStart + (freeAreaHeight - boxHeight) / 2;
-  const finalBoxY = Math.max(freeAreaStart, boxY);
-  
-  const boxX = (width - boxWidth) / 2;
-  ctx.fillStyle = 'rgba(0,0,0,0.7)';
-  ctx.beginPath();
-  roundedRect(ctx, boxX, finalBoxY, boxWidth, boxHeight, 28);
-  ctx.fill();
-  
-  const textStartY = finalBoxY + boxPadding + (boxHeight - (2 * boxPadding) - bodyHeight) / 2;
-  ctx.fillStyle = '#F8F9FA';
-  ctx.shadowColor = 'rgba(0,0,0,0.5)';
-  ctx.shadowBlur = 8;
-  for (let i = 0; i < bodyLines.length; i++) {
-    ctx.fillText(bodyLines[i], width/2, textStartY + i * bodyLineHeight);
-  }
+  let bodyLines = body.split('\n').filter(line => line.trim() !== '');
+  if (bodyLines.length > 5) bodyLines = bodyLines.slice(0, 5);
 
-  let logoBottomY = finalBoxY + boxHeight + 50;
+  const bodyLineHeight = 62;
+  const totalBodyHeight = bodyLines.length * bodyLineHeight;
+
+  const boxPadding = 55;
+  const maxBodyWidth = 780;
+  const boxWidth = maxBodyWidth + 100;
+  const boxHeight = totalBodyHeight + (boxPadding * 2);
+
+  const boxX = (width - boxWidth) / 2;
+  const boxY = titleStartY + titleTotalHeight + 70;
+
+  // Draw box
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.82)';
+  ctx.beginPath();
+  roundedRect(ctx, boxX, boxY, boxWidth, boxHeight, 32);
+  ctx.fill();
+
+  // ==================== BODY TEXT - PERFECT CENTER ====================
+  ctx.fillStyle = '#F8F9FA';
+  ctx.shadowColor = 'rgba(0,0,0,0.7)';
+  ctx.shadowBlur = 12;
+  ctx.textAlign = 'center';
+
+  const boxCenterY = boxY + (boxHeight / 2);
+  const textStartY = boxCenterY - (totalBodyHeight / 2) + (bodyLineHeight / 3);
+
+  bodyLines.forEach((line, i) => {
+    ctx.fillText(line.trim(), width / 2, textStartY + i * bodyLineHeight);
+  });
+
+  // ==================== LOGO ====================
+  let logoY = boxY + boxHeight + 55;
+
   if (fs.existsSync(logoPath)) {
     const logo = await loadImage(logoPath);
-    const maxLogoWidth = 200;
-    const logoWidth = Math.min(logo.width, maxLogoWidth);
-    const logoHeightLogo = (logo.height / logo.width) * logoWidth;
+    const logoWidth = 220;
+    const logoHeight = (logo.height / logo.width) * logoWidth;
     const logoX = (width - logoWidth) / 2;
-    const logoY = finalBoxY + boxHeight + 40;
-    const maxLogoY = height - logoHeightLogo - 70;
-    const finalLogoY = Math.min(logoY, maxLogoY);
-    
+
     ctx.beginPath();
-    ctx.moveTo(width/2 - 100, finalLogoY - 20);
-    ctx.lineTo(width/2 + 100, finalLogoY - 20);
-    ctx.lineWidth = 2;
+    ctx.moveTo(width/2 - 110, logoY - 25);
+    ctx.lineTo(width/2 + 110, logoY - 25);
+    ctx.lineWidth = 2.5;
     ctx.strokeStyle = '#E8B86B';
     ctx.stroke();
-    
+
     ctx.shadowBlur = 0;
-    ctx.drawImage(logo, logoX, finalLogoY, logoWidth, logoHeightLogo);
-    logoBottomY = finalLogoY + logoHeightLogo;
+    ctx.drawImage(logo, logoX, logoY, logoWidth, logoHeight);
+    logoY += logoHeight + 28;
   } else {
-    ctx.font = '32px "Poppins-Regular", sans-serif';
+    ctx.font = 'bold 36px "Poppins-Regular", sans-serif';
     ctx.fillStyle = '#E8B86B';
-    ctx.fillText('The Phoenix Arc', width/2, finalBoxY + boxHeight + 50);
-    logoBottomY = finalBoxY + boxHeight + 80;
+    ctx.fillText('THE PHOENIX ARC', width/2, logoY + 35);
+    logoY += 75;
   }
 
-  ctx.font = 'italic 36px "Poppins-Regular", sans-serif';
-  ctx.fillStyle = '#E8B86B';
-  ctx.shadowBlur = 6;
-  let ctaY = logoBottomY + 35;
-  if (ctaY + 50 > height) ctaY = height - 60;
-  ctx.fillText('✦ Share this to inspire someone ✦', width/2, ctaY);
+  
 
-  const buffer = canvas.toBuffer('image/jpeg', { quality: 0.95 });
+  // Save
+  const buffer = canvas.toBuffer('image/jpeg', { quality: 0.96 });
   fs.writeFileSync(outputPath, buffer);
 }
 
@@ -270,6 +288,7 @@ app.post('/api/generate-post', async (req, res) => {
     const bgUrl = await fetchBackgroundImage(topic);
     const imageName = `phoenix_${Date.now()}.jpg`;
     const imagePath = path.join(OUTPUT_DIR, imageName);
+    
     await renderMotivationalImage(title, body, bgUrl, LOGO_PATH, imagePath);
     
     res.json({
@@ -295,7 +314,7 @@ app.get('/api/download/:filename', (req, res) => {
 });
 
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
-app.get('/', (req, res) => res.json({ message: 'Phoenix Arc API is running. Use POST /api/generate-post' }));
+app.get('/', (req, res) => res.json({ message: 'Phoenix Arc API is running.' }));
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🔥 Phoenix Arc server running on port ${PORT}`));
