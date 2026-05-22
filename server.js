@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');  // ✅ FIX 1: Added missing cors require
+const cors = require('cors');
 const { OpenAI } = require('openai');
 const { createCanvas, loadImage, registerFont } = require('canvas');
 const fs = require('fs');
@@ -9,11 +9,33 @@ const axios = require('axios');
 
 const app = express();
 
-// ✅ FIX 2: Enable CORS for your Netlify frontend
-app.use(cors({ 
-  origin: ['https://thephoenixarc.netlify.app/', 'http://localhost:3000'],
-  credentials: true 
+// ----------------- CORS (Allow all needed origins) -----------------
+const allowedOrigins = [
+  'https://thephoenixarc.netlify.app',
+  'https://phoenixarc.netlify.app',
+  'http://localhost:5173',    // Vite / React dev server
+  'http://localhost:3000',
+  'http://localhost:5000'
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.warn(`Blocked by CORS: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// ⚠️ IMPORTANT: Do NOT add app.options('*', ...) here. The cors() middleware handles OPTIONS automatically.
+
 app.use(express.json());
 
 // ---------- AI Client (Groq) ----------
@@ -39,7 +61,7 @@ try {
   console.warn('⚠️ Poppins missing – using system fonts.');
 }
 
-// ---------- AI Content (UPDATED for strong captions & hashtags) ----------
+// ---------- AI Content Generation ----------
 async function generateMotivationalPost(topic) {
   const completion = await openai.chat.completions.create({
     model: 'llama-3.3-70b-versatile',
@@ -51,7 +73,7 @@ Always respond in EXACTLY this format:
 
 TITLE: ... (max 8 words, powerful and uppercase style)
 BODY: ... (2-3 sentences, inspiring, can use line breaks)
-CAPTION: ... (full social media caption – use emojis, line breaks, calls to action like "💬 Comment", "🔁 Share", "❤️ Like". End with 10-15 RELEVANT hashtags that match the specific message and topic. Do NOT use generic tags only. Include a mix of emotion, action, and community tags. Match the tone of the example: strong, direct, emotional.)
+CAPTION: ... (full social media caption – use emojis, line breaks, calls to action like "💬 Comment", "🔁 Share", "❤️ Like". End with 10-15 RELEVANT hashtags)
 
 No extra words, no markdown, no explanations.`
       },
@@ -59,8 +81,7 @@ No extra words, no markdown, no explanations.`
         role: 'user',
         content: `Topic: "${topic}"
 Write a short, powerful motivation (title max 8 words, body 2-3 sentences).
-Then write a STRONG, EMOTIONAL caption. Make it feel like a direct message to someone struggling.
-Include line breaks, emojis, a call to action (comment, share, like), and 10-15 hashtags that are BASED ON THE MOTIVATION CONTENT (e.g., if the message is about resilience, use #innerstrength #nevergiveup; if about growth, use #growthmindset #riseabove).`
+Then write a STRONG, EMOTIONAL caption. Include line breaks, emojis, a call to action, and 10-15 specific hashtags.`
       }
     ],
     temperature: 0.85,
@@ -96,7 +117,7 @@ async function fetchBackgroundImage(topic) {
   return res.data.hits[Math.floor(Math.random() * res.data.hits.length)].largeImageURL;
 }
 
-// ---------- Helpers ----------
+// ---------- Helper Functions ----------
 function roundedRect(ctx, x, y, w, h, r) {
   if (w < 2 * r) r = w / 2;
   if (h < 2 * r) r = h / 2;
@@ -129,18 +150,16 @@ function getWrappedLines(ctx, text, maxWidth) {
   return lines;
 }
 
-// ---------- SMART LAYOUT ENGINE ----------
+// ---------- Image Rendering ----------
 async function renderMotivationalImage(title, body, bgImageUrl, logoPath, outputPath) {
   const width = 1080;
   const height = 1080;
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
 
-  // Background
   const bg = await loadImage(bgImageUrl);
   ctx.drawImage(bg, 0, 0, width, height);
 
-  // Gradient overlay
   const grad = ctx.createLinearGradient(0, 0, 0, height);
   grad.addColorStop(0, 'rgba(0,0,0,0.7)');
   grad.addColorStop(0.6, 'rgba(0,0,0,0.5)');
@@ -148,14 +167,6 @@ async function renderMotivationalImage(title, body, bgImageUrl, logoPath, output
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, width, height);
 
-  // Vignette
-  const vignette = ctx.createRadialGradient(width/2, height/2, width*0.3, width/2, height/2, width*0.7);
-  vignette.addColorStop(0, 'rgba(0,0,0,0)');
-  vignette.addColorStop(1, 'rgba(0,0,0,0.4)');
-  ctx.fillStyle = vignette;
-  ctx.fillRect(0, 0, width, height);
-
-  // ----- 1. TITLE (fixed top area) -----
   ctx.font = 'bold 76px "Poppins-Bold", "Arial", sans-serif';
   ctx.fillStyle = '#FFFFFF';
   ctx.shadowColor = 'rgba(0,0,0,0.8)';
@@ -171,7 +182,6 @@ async function renderMotivationalImage(title, body, bgImageUrl, logoPath, output
   }
   const titleTotalHeight = titleLines.length * titleLineHeight;
   
-  // Accent line
   ctx.shadowBlur = 0;
   ctx.beginPath();
   ctx.moveTo(width/2 - 90, titleStartY + titleTotalHeight - 25);
@@ -180,7 +190,6 @@ async function renderMotivationalImage(title, body, bgImageUrl, logoPath, output
   ctx.strokeStyle = '#E8B86B';
   ctx.stroke();
 
-  // ----- 2. BODY TEXT BOX (centered in the remaining space) -----
   ctx.font = '40px "Poppins-Regular", "Arial", sans-serif';
   ctx.shadowBlur = 0;
   const bodyLineHeight = 62;
@@ -192,24 +201,19 @@ async function renderMotivationalImage(title, body, bgImageUrl, logoPath, output
   const boxWidth = maxBodyWidth + 70;
   const boxHeight = bodyHeight + (boxPadding * 2);
   
-  // Define the vertical space available between title and bottom
-  const reservedBottom = 180; // space for logo + CTA + margins
+  const reservedBottom = 180;
   const freeAreaStart = titleStartY + titleTotalHeight + 40;
   const freeAreaEnd = height - reservedBottom;
   const freeAreaHeight = freeAreaEnd - freeAreaStart;
   const boxY = freeAreaStart + (freeAreaHeight - boxHeight) / 2;
-  
-  // Ensure boxY doesn't go negative or overlap title
   const finalBoxY = Math.max(freeAreaStart, boxY);
   
-  // Draw box
   const boxX = (width - boxWidth) / 2;
   ctx.fillStyle = 'rgba(0,0,0,0.7)';
   ctx.beginPath();
   roundedRect(ctx, boxX, finalBoxY, boxWidth, boxHeight, 28);
   ctx.fill();
   
-  // Draw body text (centered inside box)
   const textStartY = finalBoxY + boxPadding + (boxHeight - (2 * boxPadding) - bodyHeight) / 2;
   ctx.fillStyle = '#F8F9FA';
   ctx.shadowColor = 'rgba(0,0,0,0.5)';
@@ -218,7 +222,6 @@ async function renderMotivationalImage(title, body, bgImageUrl, logoPath, output
     ctx.fillText(bodyLines[i], width/2, textStartY + i * bodyLineHeight);
   }
 
-  // ----- 3. LOGO (below the box, before CTA) -----
   let logoBottomY = finalBoxY + boxHeight + 50;
   if (fs.existsSync(logoPath)) {
     const logo = await loadImage(logoPath);
@@ -247,7 +250,6 @@ async function renderMotivationalImage(title, body, bgImageUrl, logoPath, output
     logoBottomY = finalBoxY + boxHeight + 80;
   }
 
-  // ----- 4. CALL TO ACTION (below logo) -----
   ctx.font = 'italic 36px "Poppins-Regular", sans-serif';
   ctx.fillStyle = '#E8B86B';
   ctx.shadowBlur = 6;
@@ -259,8 +261,7 @@ async function renderMotivationalImage(title, body, bgImageUrl, logoPath, output
   fs.writeFileSync(outputPath, buffer);
 }
 
-// ---------- MAIN API Endpoint (Fixed to match frontend expectation) ----------
-// ✅ FIX 3: This endpoint name matches your frontend call '/api/generate-post'
+// ---------- API Endpoint (POST /api/generate-post) ----------
 app.post('/api/generate-post', async (req, res) => {
   const { topic } = req.body;
   if (!topic) {
@@ -268,24 +269,13 @@ app.post('/api/generate-post', async (req, res) => {
   }
 
   try {
-    console.log(`Generating post for topic: ${topic}`);
-    
-    // Check for API keys
-    if (!process.env.GROQ_API_KEY) {
-      throw new Error('GROQ_API_KEY is missing in environment');
-    }
-    if (!process.env.PIXABAY_API_KEY) {
-      throw new Error('PIXABAY_API_KEY is missing in environment');
-    }
-
+    console.log(`Generating post for: ${topic}`);
     const { title, body, caption } = await generateMotivationalPost(topic);
     const bgUrl = await fetchBackgroundImage(topic);
-    const timestamp = Date.now();
-    const imageName = `phoenix_${timestamp}.jpg`;
+    const imageName = `phoenix_${Date.now()}.jpg`;
     const imagePath = path.join(OUTPUT_DIR, imageName);
     await renderMotivationalImage(title, body, bgUrl, LOGO_PATH, imagePath);
     
-    // Return both preview URL and download URL
     res.json({
       success: true,
       title,
@@ -295,41 +285,23 @@ app.post('/api/generate-post', async (req, res) => {
       downloadUrl: `/api/download/${imageName}`
     });
   } catch (err) {
-    console.error('Error in /api/generate-post:', err);
-    res.status(500).json({ error: err.message || 'Internal server error' });
+    console.error(err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Optional: Keep the old endpoint for backward compatibility
-app.post('/api/generate-motivation', async (req, res) => {
-  // Redirect to main endpoint logic
-  req.url = '/api/generate-post';
-  app._router.handle(req, res);
-});
-
-// ---------- Download Endpoint ----------
+// Download endpoint
 app.get('/api/download/:filename', (req, res) => {
   const filename = req.params.filename;
-  // Security: prevent directory traversal
   const safePath = path.join(OUTPUT_DIR, path.basename(filename));
   if (!fs.existsSync(safePath)) {
     return res.status(404).json({ error: 'File not found' });
   }
-  res.download(safePath, filename, (err) => {
-    if (err) {
-      console.error('Download error:', err);
-      res.status(500).json({ error: 'Download failed' });
-    }
-  });
+  res.download(safePath, filename);
 });
 
-// Health check
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
-
-// Root route (to avoid "Cannot GET /" confusion)
-app.get('/', (req, res) => {
-  res.json({ message: 'Phoenix Arc API is running. Use POST /api/generate-post' });
-});
+app.get('/', (req, res) => res.json({ message: 'Phoenix Arc API is running. Use POST /api/generate-post' }));
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🔥 Phoenix Arc server running on port ${PORT}`));
