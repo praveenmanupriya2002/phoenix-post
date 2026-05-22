@@ -8,7 +8,16 @@ const path = require('path');
 const axios = require('axios');
 
 const app = express();
-app.use(cors());
+const allowedOrigins = ['https://phoenixarc.netlify.app/'];
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  }
+}));
 app.use(express.json());
 
 // ---------- AI Client (Groq) ----------
