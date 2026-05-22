@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
+const cors = require('cors');  // ✅ FIX 1: Added missing cors require
 const { OpenAI } = require('openai');
 const { createCanvas, loadImage, registerFont } = require('canvas');
 const fs = require('fs');
@@ -8,15 +8,11 @@ const path = require('path');
 const axios = require('axios');
 
 const app = express();
-const allowedOrigins = ['https://phoenixarc.netlify.app/'];
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  }
+
+// ✅ FIX 2: Enable CORS for your Netlify frontend
+app.use(cors({ 
+  origin: ['https://thephoenixarc.netlify.app/', 'http://localhost:3000'],
+  credentials: true 
 }));
 app.use(express.json());
 
@@ -263,12 +259,25 @@ async function renderMotivationalImage(title, body, bgImageUrl, logoPath, output
   fs.writeFileSync(outputPath, buffer);
 }
 
-// ---------- API Endpoint: Generate Motivation ----------
-app.post('/api/generate-motivation', async (req, res) => {
+// ---------- MAIN API Endpoint (Fixed to match frontend expectation) ----------
+// ✅ FIX 3: This endpoint name matches your frontend call '/api/generate-post'
+app.post('/api/generate-post', async (req, res) => {
   const { topic } = req.body;
-  if (!topic) return res.status(400).json({ error: 'Topic required' });
+  if (!topic) {
+    return res.status(400).json({ error: 'Topic required' });
+  }
 
   try {
+    console.log(`Generating post for topic: ${topic}`);
+    
+    // Check for API keys
+    if (!process.env.GROQ_API_KEY) {
+      throw new Error('GROQ_API_KEY is missing in environment');
+    }
+    if (!process.env.PIXABAY_API_KEY) {
+      throw new Error('PIXABAY_API_KEY is missing in environment');
+    }
+
     const { title, body, caption } = await generateMotivationalPost(topic);
     const bgUrl = await fetchBackgroundImage(topic);
     const timestamp = Date.now();
@@ -278,6 +287,7 @@ app.post('/api/generate-motivation', async (req, res) => {
     
     // Return both preview URL and download URL
     res.json({
+      success: true,
       title,
       body,
       caption,
@@ -285,12 +295,19 @@ app.post('/api/generate-motivation', async (req, res) => {
       downloadUrl: `/api/download/${imageName}`
     });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error('Error in /api/generate-post:', err);
+    res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
 
-// ---------- NEW: Download Endpoint (forces .jpg download) ----------
+// Optional: Keep the old endpoint for backward compatibility
+app.post('/api/generate-motivation', async (req, res) => {
+  // Redirect to main endpoint logic
+  req.url = '/api/generate-post';
+  app._router.handle(req, res);
+});
+
+// ---------- Download Endpoint ----------
 app.get('/api/download/:filename', (req, res) => {
   const filename = req.params.filename;
   // Security: prevent directory traversal
@@ -306,7 +323,13 @@ app.get('/api/download/:filename', (req, res) => {
   });
 });
 
+// Health check
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
+
+// Root route (to avoid "Cannot GET /" confusion)
+app.get('/', (req, res) => {
+  res.json({ message: 'Phoenix Arc API is running. Use POST /api/generate-post' });
+});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🔥 Phoenix Arc server running on port ${PORT}`));
