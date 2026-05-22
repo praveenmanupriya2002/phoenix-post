@@ -9,23 +9,22 @@ const axios = require('axios');
 
 const app = express();
 
-// ----------------- CORS (Allow all needed origins) -----------------
+// ----------------- CORS (Allows Netlify + local dev) -----------------
 const allowedOrigins = [
   'https://thephoenixarc.netlify.app',
   'https://phoenixarc.netlify.app',
-  'http://localhost:5173',    // Vite / React dev server
+  'http://localhost:5173',
   'http://localhost:3000',
   'http://localhost:5000'
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl)
     if (!origin) return callback(null, true);
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      console.warn(`Blocked by CORS: ${origin}`);
+      console.warn(`Blocked CORS from: ${origin}`);
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -34,7 +33,7 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// ⚠️ IMPORTANT: Do NOT add app.options('*', ...) here. The cors() middleware handles OPTIONS automatically.
+// No app.options('*', ...) needed – cors() handles preflight
 
 app.use(express.json());
 
@@ -150,7 +149,6 @@ function getWrappedLines(ctx, text, maxWidth) {
   return lines;
 }
 
-// ---------- Image Rendering ----------
 async function renderMotivationalImage(title, body, bgImageUrl, logoPath, outputPath) {
   const width = 1080;
   const height = 1080;
@@ -261,12 +259,10 @@ async function renderMotivationalImage(title, body, bgImageUrl, logoPath, output
   fs.writeFileSync(outputPath, buffer);
 }
 
-// ---------- API Endpoint (POST /api/generate-post) ----------
+// ---------- API Endpoint ----------
 app.post('/api/generate-post', async (req, res) => {
   const { topic } = req.body;
-  if (!topic) {
-    return res.status(400).json({ error: 'Topic required' });
-  }
+  if (!topic) return res.status(400).json({ error: 'Topic required' });
 
   try {
     console.log(`Generating post for: ${topic}`);
@@ -294,9 +290,7 @@ app.post('/api/generate-post', async (req, res) => {
 app.get('/api/download/:filename', (req, res) => {
   const filename = req.params.filename;
   const safePath = path.join(OUTPUT_DIR, path.basename(filename));
-  if (!fs.existsSync(safePath)) {
-    return res.status(404).json({ error: 'File not found' });
-  }
+  if (!fs.existsSync(safePath)) return res.status(404).json({ error: 'File not found' });
   res.download(safePath, filename);
 });
 
