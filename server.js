@@ -9,7 +9,7 @@ const axios = require('axios');
 
 const app = express();
 
-// ----------------- CORS -----------------
+// ----------------- CORS (Allows Netlify + local dev) -----------------
 const allowedOrigins = [
   'https://thephoenixarc.netlify.app',
   'https://phoenixarc.netlify.app',
@@ -33,9 +33,11 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
+// No app.options('*', ...) needed – cors() handles preflight
+
 app.use(express.json());
 
-// ---------- AI Client ----------
+// ---------- AI Client (Groq) ----------
 const openai = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
   baseURL: "https://api.groq.com/openai/v1"
@@ -69,22 +71,19 @@ async function generateMotivationalPost(topic) {
 Always respond in EXACTLY this format:
 
 TITLE: ... (max 8 words, powerful and uppercase style)
-BODY: ... (Maximum 5 lines AND max 231 characters including spaces. Keep it concise and impactful.)
-CAPTION: ... (full social media caption with emojis, line breaks, CTA and hashtags)
+BODY: ... (2-3 sentences, inspiring, can use line breaks)
+CAPTION: ... (full social media caption – use emojis, line breaks, calls to action like "💬 Comment", "🔁 Share", "❤️ Like". End with 10-15 RELEVANT hashtags)
 
 No extra words, no markdown, no explanations.`
       },
       {
         role: 'user',
         content: `Topic: "${topic}"
-Write a short, powerful motivation.
-- TITLE: max 8 words
-- BODY: Maximum 5 lines & max 231 characters with spaces.
-- CAPTION: Strong emotional caption with emojis, line breaks, call to action and 10-15 hashtags.`
+Write a short, powerful motivation (title max 8 words, body 2-3 sentences).
+Then write a STRONG, EMOTIONAL caption. Include line breaks, emojis, a call to action, and 10-15 specific hashtags.`
       }
     ],
-    temperature: 0.82,
-    max_tokens: 600,
+    temperature: 0.85,
   });
 
   const raw = completion.choices[0].message.content;
@@ -96,19 +95,9 @@ Write a short, powerful motivation.
     throw new Error('Invalid AI response');
   }
 
-  let body = bodyMatch[1].trim();
-  // Enforce 231 characters including spaces
-  body = enforceCharLimit(body, 231);
-
-  // Keep original line breaks (AI may insert \n)
-  const bodyLines = body.split('\n').filter(line => line.trim() !== '');
-  if (bodyLines.length > 5) {
-    body = bodyLines.slice(0, 5).join('\n');
-  }
-
   return {
     title: titleMatch[1].trim(),
-    body: body,
+    body: bodyMatch[1].trim(),
     caption: captionMatch[1].trim()
   };
 }
@@ -117,10 +106,8 @@ Write a short, powerful motivation.
 async function fetchBackgroundImage(topic) {
   const apiKey = process.env.PIXABAY_API_KEY;
   if (!apiKey) throw new Error('Missing Pixabay API key');
-  
   const keywords = topic.split(' ').slice(0, 3).join(' ');
   const url = `https://pixabay.com/api/?key=${apiKey}&q=${encodeURIComponent(keywords)}&image_type=photo&orientation=vertical&per_page=10`;
-  
   const res = await axios.get(url);
   if (!res.data.hits.length) {
     const fallback = await axios.get(`https://pixabay.com/api/?key=${apiKey}&q=nature&image_type=photo&orientation=vertical`);
@@ -162,117 +149,149 @@ function getWrappedLines(ctx, text, maxWidth) {
   return lines;
 }
 
-// ==================== MAIN RENDER FUNCTION (FIXED) ====================
 async function renderMotivationalImage(title, body, bgImageUrl, logoPath, outputPath) {
-  const width = 1080;
-  const height = 1080;
-  const canvas = createCanvas(width, height);
+  const width = 1080;                     // fixed width (Instagram‑friendly)
+  let currentY = 80;                      // top margin
+  const horizontalMargin = 80;             // left/right margins for text
+
+  // ---------- 1. Measure title ----------
+  const titleFontSize = 76;
+  const titleLineHeight = 95;
+  const titleMaxWidth = width - 2 * horizontalMargin;
+  const tempCtx = createCanvas(width, 100).getContext('2d');
+  tempCtx.font = `bold ${titleFontSize}px "Poppins-Bold", Arial, sans-serif`;
+  const titleLines = getWrappedLines(tempCtx, title.toUpperCase(), titleMaxWidth);
+  const titleHeight = titleLines.length * titleLineHeight;
+
+  // ---------- 2. Measure body text box ----------
+  const bodyFontSize = 40;
+  const bodyLineHeight = 62;
+  const bodyMaxWidth = 780;
+  tempCtx.font = `${bodyFontSize}px "Poppins-Regular", Arial, sans-serif`;
+  const bodyLines = getWrappedLines(tempCtx, body, bodyMaxWidth);
+  const totalBodyTextHeight = bodyLines.length * bodyLineHeight;
+  const boxPadding = 50;
+  const boxHeight = totalBodyTextHeight + 2 * boxPadding;
+
+  // ---------- 3. Measure logo ----------
+  let logoHeight = 0;
+  if (fs.existsSync(logoPath)) {
+    const logoImg = await loadImage(logoPath);
+    const logoWidth = 220;
+    logoHeight = (logoImg.height / logoImg.width) * logoWidth;
+    // add small decorative line above logo
+    logoHeight += 30;   // line gap + line itself
+  } else {
+    logoHeight = 70;    // fallback text height
+  }
+
+  // ---------- 4. CTA height ----------
+  const ctaFontSize = 26;
+  const ctaHeight = 50;   // approximate
+
+  // ---------- 5. Calculate total canvas height ----------
+  const totalHeight = currentY           // top margin
+    + titleHeight                        // title block
+    + 40                                 // gap after title
+    + boxHeight                          // body box
+    + 55                                 // gap before logo
+    + logoHeight                         // logo + its line
+    + 25                                 // gap before CTA
+    + ctaHeight                          // CTA text
+    + 80;                                // bottom margin
+
+  // Create canvas with dynamic height
+  const canvas = createCanvas(width, totalHeight);
   const ctx = canvas.getContext('2d');
 
-  // Background
+  // ---------- 6. Draw background (cover mode) ----------
   const bg = await loadImage(bgImageUrl);
-  ctx.drawImage(bg, 0, 0, width, height);
+  const bgWidth = bg.width;
+  const bgHeight = bg.height;
+  const scale = Math.max(width / bgWidth, totalHeight / bgHeight);
+  const scaledWidth = bgWidth * scale;
+  const scaledHeight = bgHeight * scale;
+  const dx = (width - scaledWidth) / 2;
+  const dy = (totalHeight - scaledHeight) / 2;
+  ctx.drawImage(bg, dx, dy, scaledWidth, scaledHeight);
 
-  // Overlay
-  const grad = ctx.createLinearGradient(0, 0, 0, height);
+  // Dark overlay gradient (stretched to new height)
+  const grad = ctx.createLinearGradient(0, 0, 0, totalHeight);
   grad.addColorStop(0, 'rgba(0,0,0,0.75)');
-  grad.addColorStop(0.45, 'rgba(0,0,0,0.55)');
-  grad.addColorStop(1, 'rgba(0,0,0,0.85)');
+  grad.addColorStop(0.5, 'rgba(0,0,0,0.55)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.8)');
   ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, width, height);
+  ctx.fillRect(0, 0, width, totalHeight);
 
-  // ==================== TITLE ====================
-  ctx.font = 'bold 76px "Poppins-Bold", Arial, sans-serif';
-  ctx.fillStyle = '#FFFFFF';
   ctx.shadowColor = 'rgba(0,0,0,0.9)';
   ctx.shadowBlur = 20;
   ctx.textAlign = 'center';
 
-  const titleMaxWidth = width - 160;
-  const titleLines = getWrappedLines(ctx, title.toUpperCase(), titleMaxWidth);
-  const titleLineHeight = 95;
-  const titleStartY = 165;
-
-  titleLines.forEach((line, i) => {
-    ctx.fillText(line, width/2, titleStartY + i * titleLineHeight);
+  // ---------- 7. Draw title ----------
+  ctx.font = `bold ${titleFontSize}px "Poppins-Bold", Arial, sans-serif`;
+  ctx.fillStyle = '#FFFFFF';
+  let y = currentY + titleLineHeight / 2;  // vertical center of first line
+  titleLines.forEach((line) => {
+    ctx.fillText(line, width / 2, y);
+    y += titleLineHeight;
   });
+  currentY += titleHeight + 40;  // after title + small gap
 
-  const titleTotalHeight = titleLines.length * titleLineHeight;
-
-  // Title underline
+  // Underline
   ctx.shadowBlur = 0;
   ctx.beginPath();
-  ctx.moveTo(width/2 - 100, titleStartY + titleTotalHeight - 18);
-  ctx.lineTo(width/2 + 100, titleStartY + titleTotalHeight - 18);
+  ctx.moveTo(width / 2 - 100, currentY - 10);
+  ctx.lineTo(width / 2 + 100, currentY - 10);
   ctx.lineWidth = 10;
   ctx.strokeStyle = '#E8B86B';
   ctx.stroke();
+  currentY += 20;
 
-  // ==================== BODY BOX ====================
-  ctx.font = '40px "Poppins-Regular", Arial, sans-serif';
-  
-  let bodyLines = body.split('\n').filter(line => line.trim() !== '');
-  if (bodyLines.length > 5) bodyLines = bodyLines.slice(0, 5);
-
-  const bodyLineHeight = 62;
-  const totalBodyHeight = bodyLines.length * bodyLineHeight;
-
-  const boxPadding = 55;
-  const maxBodyWidth = 780;
-  const boxWidth = maxBodyWidth + 100;
-  const boxHeight = totalBodyHeight + (boxPadding * 2);
-
-  const boxX = (width - boxWidth) / 2;
-  const boxY = titleStartY + titleTotalHeight + 70;
-
-  // Draw box
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.82)';
+  // ---------- 8. Draw body box ----------
+  const boxX = (width - bodyMaxWidth - 2 * boxPadding) / 2;
+  const boxY = currentY;
+  ctx.fillStyle = 'rgba(0,0,0,0.82)';
   ctx.beginPath();
-  roundedRect(ctx, boxX, boxY, boxWidth, boxHeight, 32);
+  roundedRect(ctx, boxX, boxY, bodyMaxWidth + 2 * boxPadding, boxHeight, 32);
   ctx.fill();
 
-  // ==================== BODY TEXT - PERFECT CENTER ====================
+  ctx.font = `${bodyFontSize}px "Poppins-Regular", Arial, sans-serif`;
   ctx.fillStyle = '#F8F9FA';
-  ctx.shadowColor = 'rgba(0,0,0,0.7)';
-  ctx.shadowBlur = 12;
-  ctx.textAlign = 'center';
-
-  const boxCenterY = boxY + (boxHeight / 2);
-  const textStartY = boxCenterY - (totalBodyHeight / 2) + (bodyLineHeight / 3);
-
+  ctx.shadowBlur = 10;
+  const textStartY = boxY + boxPadding + (boxHeight - totalBodyTextHeight) / 2 + 8;
   bodyLines.forEach((line, i) => {
-    ctx.fillText(line.trim(), width / 2, textStartY + i * bodyLineHeight);
+    ctx.fillText(line, width / 2, textStartY + i * bodyLineHeight);
   });
 
-  // ==================== LOGO ====================
-  let logoY = boxY + boxHeight + 55;
+  currentY += boxHeight + 55;  // after box + gap
 
+  // ---------- 9. Draw logo + line above ----------
   if (fs.existsSync(logoPath)) {
-    const logo = await loadImage(logoPath);
-    const logoWidth = 220;
-    const logoHeight = (logo.height / logo.width) * logoWidth;
-    const logoX = (width - logoWidth) / 2;
-
     ctx.beginPath();
-    ctx.moveTo(width/2 - 110, logoY - 25);
-    ctx.lineTo(width/2 + 110, logoY - 25);
+    ctx.moveTo(width / 2 - 110, currentY - 25);
+    ctx.lineTo(width / 2 + 110, currentY - 25);
     ctx.lineWidth = 2.5;
     ctx.strokeStyle = '#E8B86B';
     ctx.stroke();
 
-    ctx.shadowBlur = 0;
-    ctx.drawImage(logo, logoX, logoY, logoWidth, logoHeight);
-    logoY += logoHeight + 28;
+    const logo = await loadImage(logoPath);
+    const logoWidth = 220;
+    const logoDrawHeight = (logo.height / logo.width) * logoWidth;
+    ctx.drawImage(logo, (width - logoWidth) / 2, currentY, logoWidth, logoDrawHeight);
+    currentY += logoDrawHeight + 25;
   } else {
-    ctx.font = 'bold 36px "Poppins-Regular", sans-serif';
+    ctx.font = `bold 36px "Poppins-Regular", sans-serif`;
     ctx.fillStyle = '#E8B86B';
-    ctx.fillText('THE PHOENIX ARC', width/2, logoY + 35);
-    logoY += 75;
+    ctx.fillText('THE PHOENIX ARC', width / 2, currentY + 30);
+    currentY += 70;
   }
 
-  
+  // ---------- 10. Draw CTA ----------
+  ctx.font = `italic ${ctaFontSize}px "Poppins-Regular", sans-serif`;
+  ctx.fillStyle = '#E8B86B';
+  ctx.fillText('✦ Share this to inspire someone ✦', width / 2, currentY + 45);
 
-  // Save
+  // Save image
   const buffer = canvas.toBuffer('image/jpeg', { quality: 0.96 });
   fs.writeFileSync(outputPath, buffer);
 }
@@ -288,7 +307,6 @@ app.post('/api/generate-post', async (req, res) => {
     const bgUrl = await fetchBackgroundImage(topic);
     const imageName = `phoenix_${Date.now()}.jpg`;
     const imagePath = path.join(OUTPUT_DIR, imageName);
-    
     await renderMotivationalImage(title, body, bgUrl, LOGO_PATH, imagePath);
     
     res.json({
@@ -314,7 +332,7 @@ app.get('/api/download/:filename', (req, res) => {
 });
 
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
-app.get('/', (req, res) => res.json({ message: 'Phoenix Arc API is running.' }));
+app.get('/', (req, res) => res.json({ message: 'Phoenix Arc API is running. Use POST /api/generate-post' }));
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🔥 Phoenix Arc server running on port ${PORT}`));
